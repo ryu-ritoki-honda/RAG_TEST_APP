@@ -13,6 +13,13 @@ from chunking import (
     chunk_text,
     chunk_text_by_chars,
 )
+from repository_manager import (
+    add_documents,
+    load_repository_documents,
+    load_repository_files,
+    remove_file,
+    clear_repository,
+)
 
 if "uploaded_documents" not in st.session_state:
     st.session_state["uploaded_documents"] = []
@@ -23,11 +30,20 @@ if "uploaded_doc_embeddings" not in st.session_state:
 if "processed_uploads" not in st.session_state:
     st.session_state["processed_uploads"] = []
 
+if "processed_repo_uploads" not in st.session_state:
+    st.session_state["processed_repo_uploads"] = []
+
 if "kb_documents" not in st.session_state:
     st.session_state["kb_documents"] = []
 
 if "kb_doc_embeddings" not in st.session_state:
     st.session_state["kb_doc_embeddings"] = None
+
+if "repository_documents" not in st.session_state:
+    st.session_state["repository_documents"] = []
+
+if "repository_doc_embeddings" not in st.session_state:
+    st.session_state["repository_doc_embeddings"] = None
 
 if not st.session_state["kb_documents"]:
 
@@ -39,6 +55,133 @@ if not st.session_state["kb_documents"]:
         st.session_state["kb_doc_embeddings"] = embed_texts(
             kb_documents
         )
+
+if not st.session_state["repository_documents"]:
+
+    repository_documents = load_repository_documents()
+
+    st.session_state["repository_documents"] = repository_documents
+
+    if repository_documents:
+        st.session_state["repository_doc_embeddings"] = embed_texts(
+            repository_documents
+        )
+
+
+# =====================================================
+# Repository Manager
+# =====================================================
+
+with st.sidebar:
+    st.header("Repository")
+
+    repo_files = load_repository_files()
+
+    if repo_files:
+        st.write("Stored files:")
+        for f in repo_files:
+            c1, c2 = st.columns([4, 1])
+
+            with c1:
+                st.write(f)
+
+            with c2:
+                if st.button("❌", key=f"delete_{f}"):
+                    remove_file(f)
+                    st.rerun()
+
+    if st.button("Clear Repository"):
+        clear_repository()
+        st.session_state["processed_repo_uploads"] = []
+        st.session_state["repository_documents"] = []
+        st.session_state["repository_doc_embeddings"] = None
+        st.rerun()
+
+    repo_upload = st.file_uploader(
+        "Add files to repository",
+        type=["txt", "csv", "pdf"],
+        accept_multiple_files=True,
+        key="repo_upload",
+    )
+
+    if repo_upload:
+        processed_repo = st.session_state["processed_repo_uploads"]
+        new_repo_files = []
+        
+        for uploaded_file in repo_upload:
+            file_key = (uploaded_file.name, uploaded_file.size)
+            if file_key not in processed_repo:
+                new_repo_files.append(uploaded_file)
+                processed_repo.append(file_key)
+        
+        if new_repo_files:
+            for uploaded_file in new_repo_files:
+
+                chunks = []
+
+                if uploaded_file.name.lower().endswith(".csv"):
+                    text = io.TextIOWrapper(
+                        uploaded_file,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+
+                    df = pd.read_csv(text)
+
+                    for row in df.astype(str).itertuples(index=False, name=None):
+                        joined = " ".join(
+                            value
+                            for value in row
+                            if value and value.strip()
+                        )
+
+                        if joined.strip():
+                            chunks.append(joined)
+
+                elif uploaded_file.name.lower().endswith(".pdf"):
+                    reader = PdfReader(uploaded_file)
+
+                    text = ""
+
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+
+                        if page_text:
+                            text += page_text + "\n"
+
+                    chunks = chunk_text_by_chars(
+                        text,
+                        chunk_size=1000,
+                        overlap=200,
+                    )
+
+                else:
+                    text = uploaded_file.read().decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+
+                    chunks = chunk_text(
+                        text,
+                        chunk_size=8,
+                        overlap=2,
+                    )
+
+                add_documents(
+                    uploaded_file.name,
+                    chunks,
+                )
+
+            # Reload repository documents and embeddings into session state
+            repository_documents = load_repository_documents()
+            st.session_state["repository_documents"] = repository_documents
+            
+            if repository_documents:
+                repository_embeddings = embed_texts(repository_documents)
+                st.session_state["repository_doc_embeddings"] = repository_embeddings
+
+            st.rerun()
+
 
 # Use centralized embedding utilities (batching + cache)
 
@@ -228,8 +371,14 @@ if st.button("Ask"):
         []
     )
 
+    repository_documents = st.session_state.get(
+        "repository_documents",
+        []
+    )
+
     documents = (
         kb_documents +
+        repository_documents +
         uploaded_documents
     )
 
@@ -252,8 +401,16 @@ if st.button("Ask"):
     if uploaded_embeddings is None:
         uploaded_embeddings = np.empty((0, embedding_dim))
 
+    repository_embeddings = st.session_state.get(
+        "repository_doc_embeddings"
+    )
+
+    if repository_embeddings is None:
+        repository_embeddings = np.empty((0, embedding_dim))
+
     doc_embeddings = np.vstack([
         kb_embeddings,
+        repository_embeddings,
         uploaded_embeddings
     ])
 
