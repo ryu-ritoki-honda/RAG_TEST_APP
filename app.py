@@ -3,50 +3,15 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.express as px
-from sklearn.decomposition import PCA
 from sklearn.metrics.pairwise import cosine_similarity
-import os
 import umap
+from pypdf import PdfReader
 from rag import retrieve, answer_question
-from embeddings_utils import embed_texts, embed_text
-
-def chunk_text(
-    text: str,
-    chunk_size: int = 8,
-    overlap: int = 2,
-):
-    """
-    Split text into overlapping chunks of lines.
-
-    Example:
-    chunk_size=8
-    overlap=2
-
-    Chunk 1: lines 1-8
-    Chunk 2: lines 7-14
-    Chunk 3: lines 13-20
-    """
-
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if line.strip()
-    ]
-
-    chunks = []
-
-    step = max(1, chunk_size - overlap)
-
-    for i in range(0, len(lines), step):
-        chunk_lines = lines[i:i + chunk_size]
-
-        if not chunk_lines:
-            continue
-
-        chunk = "\n".join(chunk_lines)
-        chunks.append(chunk)
-
-    return chunks
+from embeddings_utils import embed_texts
+from chunking import (
+    chunk_text,
+    chunk_text_by_chars,
+)
 
 if "uploaded_documents" not in st.session_state:
     st.session_state["uploaded_documents"] = []
@@ -152,7 +117,7 @@ if st.button("Generate Embeddings"):
 
 uploaded = st.file_uploader(
     "Upload documents",
-    type=["txt", "csv"],
+    type=["txt", "csv", "pdf"],
     accept_multiple_files=True
 )
 
@@ -177,6 +142,20 @@ if uploaded:
                     joined = " ".join(value for value in row if value and value.strip())
                     if joined.strip():
                         new_documents.append(joined.strip())
+            elif uploaded_file.name.lower().endswith(".pdf"):
+                reader = PdfReader(uploaded_file)
+                text = ""
+                for page in reader.pages:
+                    page_text = page.extract_text()
+
+                    if page_text:
+                        text += page_text + "\n"
+                chunks = chunk_text_by_chars(
+                    text,
+                    chunk_size=1000,
+                    overlap=200
+                )
+                new_documents.extend(chunks)
             else:
                 text = uploaded_file.read().decode(
                     "utf-8",

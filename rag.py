@@ -96,12 +96,20 @@ def answer_question(question, chunks):
         print(doc)
 
     prompt = f"""
-Answer using ONLY the provided context.
+Before answering:
+
+1. Verify that the assumptions in the question are supported by the context.
+2. If the question contains a false assumption, explain why it is incorrect.
+3. Do not accept the premise of the question unless it is supported by the retrieved chunks.
+4. If the answer truly cannot be determined, say so.
 
 If the answer requires combining information from multiple chunks,
 reason through the clues step by step.
 
-If the answer cannot be determined from the context, say:
+Special cases:
+- If the question contains an incorrect assumption, say:
+"The premise of the question is incorrect because ..."
+- If the answer is not present in the context, say:
 "I cannot determine the answer from the provided context."
 
 When answering:
