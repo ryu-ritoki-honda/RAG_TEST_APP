@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 from sklearn.metrics.pairwise import cosine_similarity
+from knowledge_base import load_knowledge_base
 import umap
 from pypdf import PdfReader
 from rag import retrieve, answer_question
@@ -21,6 +22,23 @@ if "uploaded_doc_embeddings" not in st.session_state:
 
 if "processed_uploads" not in st.session_state:
     st.session_state["processed_uploads"] = []
+
+if "kb_documents" not in st.session_state:
+    st.session_state["kb_documents"] = []
+
+if "kb_doc_embeddings" not in st.session_state:
+    st.session_state["kb_doc_embeddings"] = None
+
+if not st.session_state["kb_documents"]:
+
+    kb_documents = load_knowledge_base()
+
+    st.session_state["kb_documents"] = kb_documents
+
+    if kb_documents:
+        st.session_state["kb_doc_embeddings"] = embed_texts(
+            kb_documents
+        )
 
 # Use centralized embedding utilities (batching + cache)
 
@@ -196,33 +214,83 @@ question = st.text_input(
 )
 
 if st.button("Ask"):
-    uploaded_documents = st.session_state.get("uploaded_documents", [])
-    uploaded_doc_embeddings = st.session_state.get("uploaded_doc_embeddings")
 
-    if len(uploaded_documents) == 0:
-        st.warning("Upload a txt file first.")
-        st.stop()
+    # --------------------------
+    # Get all documents
+    # --------------------------
+    kb_documents = st.session_state.get(
+        "kb_documents",
+        []
+    )
 
-    if uploaded_doc_embeddings is None:
-        st.warning("Upload a txt file first.")
+    uploaded_documents = st.session_state.get(
+        "uploaded_documents",
+        []
+    )
+
+    documents = (
+        kb_documents +
+        uploaded_documents
+    )
+
+    # --------------------------
+    # Get all embeddings
+    # --------------------------
+    kb_embeddings = st.session_state.get(
+        "kb_doc_embeddings"
+    )
+
+    uploaded_embeddings = st.session_state.get(
+        "uploaded_doc_embeddings"
+    )
+
+    embedding_dim = 1536
+
+    if kb_embeddings is None:
+        kb_embeddings = np.empty((0, embedding_dim))
+
+    if uploaded_embeddings is None:
+        uploaded_embeddings = np.empty((0, embedding_dim))
+
+    doc_embeddings = np.vstack([
+        kb_embeddings,
+        uploaded_embeddings
+    ])
+
+    # --------------------------
+    # Validation
+    # --------------------------
+    if len(documents) == 0:
+        st.warning(
+            "No documents available. "
+            "Add files to the knowledge_base folder "
+            "or upload documents."
+        )
         st.stop()
 
     if not question.strip():
         st.warning("Please enter a question.")
         st.stop()
 
-    # RAG retrieval using uploaded documents only
+    # --------------------------
+    # Retrieval
+    # --------------------------
     chunks, query_embedding = retrieve(
         question,
-        uploaded_documents,
-        uploaded_doc_embeddings,
+        documents,
+        doc_embeddings,
     )
 
     st.subheader("Retrieved Chunks")
 
-    for chunk in chunks:
-        st.write(chunk)
+    for doc, score in chunks:
+        st.write(f"Score: {score:.3f}")
+        st.write(doc)
+        st.divider()
 
+    # --------------------------
+    # Generate answer
+    # --------------------------
     answer = answer_question(
         question,
         chunks
@@ -231,41 +299,55 @@ if st.button("Ask"):
     st.subheader("Answer")
     st.write(answer)
 
-    # Get current uploaded embeddings
-    uploaded_documents = st.session_state.get("uploaded_documents", [])
-    uploaded_doc_embeddings = st.session_state.get("uploaded_doc_embeddings")
+    # --------------------------
+    # Embedding visualization
+    # --------------------------
+    document_embeddings = np.asarray(
+        doc_embeddings,
+        dtype=np.float64
+    )
 
-    if uploaded_doc_embeddings is None or len(uploaded_documents) == 0:
-        st.warning("Upload a txt file first.")
-        st.stop()
+    texts = documents
 
-    document_embeddings = np.asarray(uploaded_doc_embeddings, dtype=np.float64)
-    texts = uploaded_documents
+    query_embedding = np.asarray(
+        query_embedding,
+        dtype=np.float64
+    )
 
-    # Add question embedding
-    query_embedding = np.asarray(query_embedding, dtype=np.float64)
-    all_embeddings = np.vstack([document_embeddings, query_embedding])
+    all_embeddings = np.vstack([
+        document_embeddings,
+        query_embedding
+    ])
 
-    # Re-run UMAP including question
     reducer = umap.UMAP(
         n_components=2,
         random_state=42
     )
 
-    all_coords: np.ndarray = np.asarray(reducer.fit_transform(all_embeddings), dtype=np.float64)
+    all_coords = np.asarray(
+        reducer.fit_transform(all_embeddings),
+        dtype=np.float64
+    )
 
     if all_coords.ndim != 2 or all_coords.shape[1] < 2:
-        st.warning("Embedding projection did not return two dimensions.")
+        st.warning(
+            "Embedding projection did not return two dimensions."
+        )
         st.stop()
 
+    # --------------------------
     # Build dataframe
+    # --------------------------
     plot_df = pd.DataFrame({
         "Sentence": texts + [question],
         "X": all_coords[:, 0],
         "Y": all_coords[:, 1]
     })
 
-    retrieved_docs = [doc for doc, score in chunks]
+    retrieved_docs = [
+        doc
+        for doc, score in chunks
+    ]
 
     plot_df["Type"] = "Document"
 
@@ -278,7 +360,9 @@ if st.button("Ask"):
         "Type"
     ] = "Question"
 
+    # --------------------------
     # Plot
+    # --------------------------
     fig = px.scatter(
         plot_df,
         x="X",
@@ -288,7 +372,9 @@ if st.button("Ask"):
         title="Embedding Space + Question"
     )
 
-    fig.update_traces(marker=dict(size=12))
+    fig.update_traces(
+        marker=dict(size=12)
+    )
 
     st.plotly_chart(
         fig,

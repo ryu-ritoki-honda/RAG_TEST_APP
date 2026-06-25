@@ -24,6 +24,35 @@ def retrieve(
     if doc_embeddings is None:
         doc_embeddings = build_doc_embeddings(documents)
 
+    # Increase k for aggregation/filter questions
+    aggregation_words = [
+        "highest",
+        "lowest",
+        "maximum",
+        "minimum",
+        "average",
+        "sum",
+        "count",
+        "top",
+        "all",
+        "every",
+        "above",
+        "below",
+        "greater",
+        "less",
+        "at least",
+        "or higher",
+        "or lower",
+    ]
+
+    query_lower = query.lower()
+
+    if any(
+        word in query_lower
+        for word in aggregation_words
+    ):
+        k = 50
+        
     # Embed the query
     query_embedding = embed_text(query)
 
@@ -105,6 +134,13 @@ Before answering:
 
 If the answer requires combining information from multiple chunks,
 reason through the clues step by step.
+
+If the question asks for ALL matching items:
+1. Examine every retrieved chunk.
+2. Evaluate each chunk independently.
+3. Do not stop after finding some matches.
+4. Return every item that satisfies the condition.
+5. Double-check that no matching entries were omitted.
 
 Special cases:
 - If the question contains an incorrect assumption, say:
