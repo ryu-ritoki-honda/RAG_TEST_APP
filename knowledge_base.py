@@ -6,6 +6,7 @@ from chunking import (
     chunk_text,
     chunk_text_by_chars,
 )
+from image_extraction import extract_text_and_images_from_pdf
 
 
 def load_knowledge_base(folder="knowledge_base"):
@@ -33,23 +34,10 @@ def load_knowledge_base(folder="knowledge_base"):
             )
 
         elif file.suffix.lower() == ".pdf":
-            reader = PdfReader(str(file))
-
-            text = ""
-
-            for page in reader.pages:
-                page_text = page.extract_text()
-
-                if page_text:
-                    text += page_text + "\n"
-
-            documents.extend(
-                chunk_text_by_chars(
-                    text,
-                    chunk_size=1000,
-                    overlap=200
-                )
-            )
+            text_chunks, image_descriptions = extract_text_and_images_from_pdf(str(file))
+            
+            documents.extend(text_chunks)
+            documents.extend(image_descriptions)
 
         elif file.suffix.lower() == ".csv":
             df = pd.read_csv(file)

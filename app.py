@@ -13,6 +13,7 @@ from chunking import (
     chunk_text,
     chunk_text_by_chars,
 )
+from image_extraction import extract_text_and_images_from_pdf
 from repository_manager import (
     add_documents,
     load_repository_documents,
@@ -139,21 +140,36 @@ with st.sidebar:
                             chunks.append(joined)
 
                 elif uploaded_file.name.lower().endswith(".pdf"):
-                    reader = PdfReader(uploaded_file)
-
-                    text = ""
-
-                    for page in reader.pages:
-                        page_text = page.extract_text()
-
-                        if page_text:
-                            text += page_text + "\n"
-
-                    chunks = chunk_text_by_chars(
-                        text,
-                        chunk_size=1000,
-                        overlap=200,
-                    )
+                    # Save temporarily to process with image extraction
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(uploaded_file.getbuffer())
+                        tmp_path = tmp.name
+                    
+                    try:
+                        # Extract text and images
+                        text_chunks, image_descriptions = extract_text_and_images_from_pdf(tmp_path)
+                        chunks = text_chunks + image_descriptions
+                    except Exception as e:
+                        st.warning(f"Could not extract images from {uploaded_file.name}: {e}. Using text only.")
+                        # Fallback to text only
+                        reader = PdfReader(uploaded_file)
+                        text = ""
+                        for page in reader.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n"
+                        chunks = chunk_text_by_chars(
+                            text,
+                            chunk_size=1000,
+                            overlap=200,
+                        )
+                    finally:
+                        import os
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
 
                 else:
                     text = uploaded_file.read().decode(
@@ -304,18 +320,37 @@ if uploaded:
                     if joined.strip():
                         new_documents.append(joined.strip())
             elif uploaded_file.name.lower().endswith(".pdf"):
-                reader = PdfReader(uploaded_file)
-                text = ""
-                for page in reader.pages:
-                    page_text = page.extract_text()
-
-                    if page_text:
-                        text += page_text + "\n"
-                chunks = chunk_text_by_chars(
-                    text,
-                    chunk_size=1000,
-                    overlap=200
-                )
+                # Save temporarily to process with image extraction
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_file.getbuffer())
+                    tmp_path = tmp.name
+                
+                try:
+                    # Extract text and images
+                    text_chunks, image_descriptions = extract_text_and_images_from_pdf(tmp_path)
+                    chunks = text_chunks + image_descriptions
+                except Exception as e:
+                    st.warning(f"Could not extract images from {uploaded_file.name}: {e}. Using text only.")
+                    # Fallback to text only
+                    reader = PdfReader(uploaded_file)
+                    text = ""
+                    for page in reader.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            text += page_text + "\n"
+                    chunks = chunk_text_by_chars(
+                        text,
+                        chunk_size=1000,
+                        overlap=200
+                    )
+                finally:
+                    import os
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
+                
                 new_documents.extend(chunks)
             else:
                 text = uploaded_file.read().decode(
@@ -438,12 +473,11 @@ if st.button("Ask"):
         doc_embeddings,
     )
 
-    st.subheader("Retrieved Chunks")
-
-    for doc, score in chunks:
-        st.write(f"Score: {score:.3f}")
-        st.write(doc)
-        st.divider()
+    with st.expander("📄 Retrieved Chunks", expanded=True):
+        for doc, score in chunks:
+            st.write(f"Score: {score:.3f}")
+            st.write(doc)
+            st.divider()
 
     # --------------------------
     # Generate answer
