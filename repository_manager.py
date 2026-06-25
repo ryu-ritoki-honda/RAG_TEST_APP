@@ -1,6 +1,5 @@
 from pathlib import Path
 import numpy as np
-import faiss
 
 from sqlalchemy import (
     create_engine,
@@ -24,7 +23,6 @@ Path("repository").mkdir(
 )
 
 DB_PATH = "sqlite:///repository/documents.db"
-INDEX_PATH = "repository/faiss.index"
 
 EMBEDDING_DIM = 1536
 
@@ -65,30 +63,6 @@ documents_table = Table(
 
 metadata.create_all(engine)
 
-
-# =====================================================
-# FAISS
-# =====================================================
-
-def load_index():
-
-    if Path(INDEX_PATH).exists():
-        return faiss.read_index(
-            INDEX_PATH
-        )
-
-    return faiss.IndexFlatIP(
-        EMBEDDING_DIM
-    )
-
-
-def save_index(index):
-    faiss.write_index(
-        index,
-        INDEX_PATH
-    )
-
-
 # =====================================================
 # Add documents
 # =====================================================
@@ -114,16 +88,6 @@ def add_documents(
         embeddings,
         dtype=np.float32
     )
-
-    faiss.normalize_L2(
-        embeddings
-    )
-
-    index = load_index()
-    index.add(
-        embeddings
-    )
-    save_index(index)
 
     for chunk in chunks:
         conn.execute(
@@ -211,12 +175,6 @@ def clear_repository():
     conn.commit()
     conn.close()
 
-    index = faiss.IndexFlatIP(
-        EMBEDDING_DIM
-    )
-
-    save_index(index)
-
 
 # =====================================================
 # Delete one file
@@ -244,39 +202,3 @@ def remove_file(
 
     conn.commit()
     conn.close()
-
-    rebuild_faiss()
-
-
-# =====================================================
-# Rebuild FAISS
-# =====================================================
-
-def rebuild_faiss():
-
-    documents = load_repository_documents()
-
-    index = faiss.IndexFlatIP(
-        EMBEDDING_DIM
-    )
-
-    if len(documents) > 0:
-
-        embeddings = embed_texts(
-            documents
-        )
-
-        embeddings = np.asarray(
-            embeddings,
-            dtype=np.float32
-        )
-
-        faiss.normalize_L2(
-            embeddings
-        )
-
-        index.add(
-            embeddings
-        )
-
-    save_index(index)

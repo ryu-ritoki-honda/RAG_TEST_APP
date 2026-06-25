@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 from sklearn.metrics.pairwise import cosine_similarity
 from knowledge_base import load_knowledge_base
-import umap
+from sklearn.decomposition import PCA
 from pypdf import PdfReader
 from rag import retrieve, answer_question
 from embeddings_utils import embed_texts
@@ -245,12 +245,8 @@ if st.button("Generate Embeddings"):
     st.session_state["texts"] = texts
     st.session_state["embeddings"] = X
 
-    reducer = umap.UMAP(
-        n_components=2,
-        random_state=42
-    )
-
-    coords: np.ndarray = np.asarray(reducer.fit_transform(X), dtype=np.float64)
+    reducer = PCA(n_components=2)
+    coords = reducer.fit_transform(X)
     st.session_state["coords"] = coords
 
     if coords.ndim != 2 or coords.shape[1] < 2:
@@ -510,10 +506,7 @@ if st.button("Ask"):
         query_embedding
     ])
 
-    reducer = umap.UMAP(
-        n_components=2,
-        random_state=42
-    )
+    reducer = PCA(n_components=2)
 
     all_coords = np.asarray(
         reducer.fit_transform(all_embeddings),

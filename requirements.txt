@@ -9,4 +9,3 @@ openai
 httpx
 rank-bm25
 sqlalchemy
-umap-learn
