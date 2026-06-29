@@ -34,7 +34,7 @@ def get_ocr_reader(languages: List[str] = ['en']):
     return _ocr_reader
 
 
-def ocr_image(image_bytes: bytes, page_num: int = None) -> str:
+def ocr_image(image_bytes: bytes, page_num: int = None) -> str: # type: ignore
     """
     Extract text from an image using OCR.
     
@@ -64,7 +64,7 @@ def ocr_image(image_bytes: bytes, page_num: int = None) -> str:
             # Extract and organize text
             text_lines = []
             for detection in results:
-                text = detection[1]
+                text = detection[1] # type: ignore
                 if text.strip():
                     text_lines.append(text.strip())
             
