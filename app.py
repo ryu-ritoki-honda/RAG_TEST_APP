@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.express as px
+from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 from knowledge_base import load_knowledge_base
 from sklearn.decomposition import PCA
@@ -14,6 +15,7 @@ from chunking import (
     chunk_text_by_chars,
 )
 from image_extraction import extract_text_and_images_from_pdf
+from ocr_utils import ocr_image_file, extract_text_with_ocr_fallback
 from repository_manager import (
     add_documents,
     load_repository_documents,
@@ -100,7 +102,7 @@ with st.sidebar:
 
     repo_upload = st.file_uploader(
         "Add files to repository",
-        type=["txt", "csv", "pdf"],
+        type=["txt", "csv", "pdf", "jpg", "jpeg", "png", "bmp", "tiff"],
         accept_multiple_files=True,
         key="repo_upload",
     )
@@ -140,7 +142,7 @@ with st.sidebar:
                             chunks.append(joined)
 
                 elif uploaded_file.name.lower().endswith(".pdf"):
-                    # Save temporarily to process with image extraction
+                    # Save temporarily to process with image extraction and OCR fallback
                     import tempfile
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                         tmp.write(uploaded_file.getbuffer())
@@ -149,21 +151,48 @@ with st.sidebar:
                     try:
                         # Extract text and images
                         text_chunks, image_descriptions = extract_text_and_images_from_pdf(tmp_path)
-                        chunks = text_chunks + image_descriptions
+                        # Also try OCR for scanned PDFs
+                        ocr_chunks, ocr_used = extract_text_with_ocr_fallback(tmp_path)
+                        chunks = text_chunks + image_descriptions + ocr_chunks
                     except Exception as e:
-                        st.warning(f"Could not extract images from {uploaded_file.name}: {e}. Using text only.")
-                        # Fallback to text only
-                        reader = PdfReader(uploaded_file)
-                        text = ""
-                        for page in reader.pages:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text += page_text + "\n"
-                        chunks = chunk_text_by_chars(
-                            text,
-                            chunk_size=1000,
-                            overlap=200,
-                        )
+                        st.warning(f"Error processing {uploaded_file.name}: {e}. Attempting text extraction only.")
+                        try:
+                            # Fallback to text only
+                            reader = PdfReader(uploaded_file)
+                            text = ""
+                            for page in reader.pages:
+                                page_text = page.extract_text()
+                                if page_text:
+                                    text += page_text + "\n"
+                            chunks = chunk_text_by_chars(
+                                text,
+                                chunk_size=1000,
+                                overlap=200,
+                            )
+                        except Exception as e2:
+                            st.error(f"Could not extract text from {uploaded_file.name}: {e2}")
+                            chunks = []
+                    finally:
+                        import os
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+
+                elif uploaded_file.name.lower() in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
+                    # Handle image files with OCR
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+                        tmp.write(uploaded_file.getbuffer())
+                        tmp_path = tmp.name
+                    
+                    try:
+                        chunks = ocr_image_file(tmp_path)
+                        if not chunks:
+                            st.warning(f"Could not extract text from image {uploaded_file.name}")
+                    except Exception as e:
+                        st.error(f"Error processing image {uploaded_file.name}: {e}")
+                        chunks = []
                     finally:
                         import os
                         try:
@@ -290,7 +319,7 @@ if st.button("Generate Embeddings"):
 
 uploaded = st.file_uploader(
     "Upload documents",
-    type=["txt", "csv", "pdf"],
+    type=["txt", "csv", "pdf", "jpg", "jpeg", "png", "bmp", "tiff"],
     accept_multiple_files=True
 )
 
@@ -316,7 +345,7 @@ if uploaded:
                     if joined.strip():
                         new_documents.append(joined.strip())
             elif uploaded_file.name.lower().endswith(".pdf"):
-                # Save temporarily to process with image extraction
+                # Save temporarily to process with image extraction and OCR fallback
                 import tempfile
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                     tmp.write(uploaded_file.getbuffer())
@@ -325,21 +354,27 @@ if uploaded:
                 try:
                     # Extract text and images
                     text_chunks, image_descriptions = extract_text_and_images_from_pdf(tmp_path)
-                    chunks = text_chunks + image_descriptions
+                    # Also try OCR for scanned PDFs
+                    ocr_chunks, ocr_used = extract_text_with_ocr_fallback(tmp_path)
+                    chunks = text_chunks + image_descriptions + ocr_chunks
                 except Exception as e:
-                    st.warning(f"Could not extract images from {uploaded_file.name}: {e}. Using text only.")
-                    # Fallback to text only
-                    reader = PdfReader(uploaded_file)
-                    text = ""
-                    for page in reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n"
-                    chunks = chunk_text_by_chars(
-                        text,
-                        chunk_size=1000,
-                        overlap=200
-                    )
+                    st.warning(f"Error processing {uploaded_file.name}: {e}. Attempting text extraction only.")
+                    try:
+                        # Fallback to text only
+                        reader = PdfReader(uploaded_file)
+                        text = ""
+                        for page in reader.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n"
+                        chunks = chunk_text_by_chars(
+                            text,
+                            chunk_size=1000,
+                            overlap=200
+                        )
+                    except Exception as e2:
+                        st.error(f"Could not extract text from {uploaded_file.name}: {e2}")
+                        chunks = []
                 finally:
                     import os
                     try:
@@ -348,6 +383,28 @@ if uploaded:
                         pass
                 
                 new_documents.extend(chunks)
+                
+            elif uploaded_file.name.lower() in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]:
+                # Handle image files with OCR
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+                    tmp.write(uploaded_file.getbuffer())
+                    tmp_path = tmp.name
+                
+                try:
+                    chunks = ocr_image_file(tmp_path)
+                    if chunks:
+                        new_documents.extend(chunks)
+                    else:
+                        st.warning(f"Could not extract text from image {uploaded_file.name}")
+                except Exception as e:
+                    st.error(f"Error processing image {uploaded_file.name}: {e}")
+                finally:
+                    import os
+                    try:
+                        os.unlink(tmp_path)
+                    except:
+                        pass
             else:
                 text = uploaded_file.read().decode(
                     "utf-8",

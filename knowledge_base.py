@@ -7,6 +7,7 @@ from chunking import (
     chunk_text_by_chars,
 )
 from image_extraction import extract_text_and_images_from_pdf
+from ocr_utils import extract_text_with_ocr_fallback
 
 
 def load_knowledge_base(folder="knowledge_base"):
@@ -34,10 +35,13 @@ def load_knowledge_base(folder="knowledge_base"):
             )
 
         elif file.suffix.lower() == ".pdf":
+            # Try to extract text and images, with OCR fallback for scanned PDFs
             text_chunks, image_descriptions = extract_text_and_images_from_pdf(str(file))
+            ocr_chunks, ocr_used = extract_text_with_ocr_fallback(str(file))
             
             documents.extend(text_chunks)
             documents.extend(image_descriptions)
+            documents.extend(ocr_chunks)
 
         elif file.suffix.lower() == ".csv":
             df = pd.read_csv(file)

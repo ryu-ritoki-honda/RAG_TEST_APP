@@ -5,7 +5,12 @@ plotly
 scikit-learn
 pypdf
 pdfplumber
+pdf2image
+easyocr
 openai
 httpx
 rank-bm25
 sqlalchemy
+faiss-cpu
+umap-learn
+Pillow
