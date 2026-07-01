@@ -1,5 +1,9 @@
 import requests
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 url = "https://dev-aoai-api-all.jpn.mds.honda.com/openai/deployments/gpt-4.1/chat/completions"
 querystring = {"api-version":"2025-03-01-preview"}
 
@@ -23,7 +27,7 @@ payload = {"messages": [
     ]}
 headers = {
     "Content-Type": "application/json",
-    "api-key": os.environ["AZURE_OPENAI_API_KEY"],
+    "api-key": os.getenv("AZURE_OPENAI_API_KEY"),
     "User-Agent": ""
 }
 path = os.getcwd()

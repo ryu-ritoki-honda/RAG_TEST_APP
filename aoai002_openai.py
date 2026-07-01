@@ -1,6 +1,7 @@
 import os
 import openai
 from openai import AzureOpenAI
+from dotenv import load_dotenv
 import json
 
 import httpx
@@ -13,9 +14,11 @@ http_client = httpx.Client(
     verify=False
 )
 
+load_dotenv()
+
 aoai_client = AzureOpenAI(
     azure_endpoint="https://dev-aoai-api-all.jpn.mds.honda.com/",
-    api_key=os.environ["AZURE_OPENAI_API_KEY"],
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
     api_version="2025-03-01-preview",
     http_client=http_client
 )

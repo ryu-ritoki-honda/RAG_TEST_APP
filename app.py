@@ -527,8 +527,14 @@ if st.button("Ask"):
     )
 
     with st.expander("📄 Retrieved Chunks", expanded=True):
-        for doc, score in chunks:
-            st.write(f"Score: {score:.3f}")
+        for doc, score, sim, bm25 in chunks:
+            st.markdown(f"""
+            **Score:** {score:.3f}  
+            **Semantic similarity:** {sim:.3f}  
+            **Keyword match (BM25):** {bm25:.3f}  
+
+            ---
+            """)
             st.write(doc)
             st.divider()
 
@@ -587,7 +593,7 @@ if st.button("Ask"):
 
     retrieved_docs = [
         doc
-        for doc, score in chunks
+        for doc, score, sim, bm25 in chunks
     ]
 
     plot_df["Type"] = "Document"
