@@ -33,9 +33,9 @@ def get_hybrid_weights(query: str):
 
 def mmr_select(doc_embeddings, scores, k=15, lambda_=0.7):
     selected = []
+    selected_scores = []
     candidates = list(range(len(scores)))
 
-    # normalize embeddings for cosine reuse
     normed = doc_embeddings / (np.linalg.norm(doc_embeddings, axis=1, keepdims=True) + 1e-12)
 
     while len(selected) < k and candidates:
@@ -57,12 +57,15 @@ def mmr_select(doc_embeddings, scores, k=15, lambda_=0.7):
             if mmr_score > best_score:
                 best_score = mmr_score
                 best = i
+
         if best is None:
             break
+
         selected.append(best)
+        selected_scores.append(best_score)
         candidates.remove(best)
 
-    return selected
+    return selected, selected_scores
 
 
 def rerank_with_llm(query: str, docs: List[str]):
@@ -112,7 +115,7 @@ def retrieve(
     documents: Optional[List[str]] = None,
     doc_embeddings: Optional[np.ndarray] = None,
     k: int = 15,
-) -> Tuple[List[Tuple[str, float, float, float]], np.ndarray]:
+) -> Tuple[List[Tuple[str, float, float, float, float]], np.ndarray]:
 
     if documents is None:
         documents = default_documents
@@ -190,7 +193,7 @@ def retrieve(
     # -----------------------------
     # Stage 7: diversity selection (MMR)
     # -----------------------------
-    final_selected = mmr_select(
+    final_selected, mmr_scores = mmr_select(
         doc_embeddings[top_idx],
         candidate_scores,
         k=k
@@ -201,11 +204,12 @@ def retrieve(
     scores = [
         (
             documents[i],
-            float(final_score[i]),   # ranking score (used internally)
-            float(sims[i]),          # semantic similarity
-            float(bm25_scores[i])    # keyword score
+            float(final_score[i]),
+            float(sims[i]),
+            float(bm25_scores[i]),
+            float(mmr_scores[idx]) 
         )
-        for i in selected_indices
+        for idx, i in enumerate(selected_indices)
     ]
 
     return scores, query_embedding
@@ -219,13 +223,13 @@ def answer_question(question, chunks):
 
     context = "\n".join(
         f"[Chunk {i+1}] (score={score:.3f})\n{doc}\n"
-        for i, (doc, score, sim, bm25) in enumerate(chunks)
+        for i, (doc, score, *rest) in enumerate(chunks)
     )
 
     print("\nRetrieved Chunks")
     print("=" * 50)
 
-    for i, (doc, score, sim, bm25) in enumerate(chunks):
+    for i, (doc, score, *rest) in enumerate(chunks):
         print(f"\nChunk {i+1}")
         print(f"Score: {score:.3f}")
         print(doc)
