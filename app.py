@@ -3,6 +3,7 @@ import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import time
 
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
@@ -219,6 +220,11 @@ if uploaded:
 
 question = st.text_input("Ask a question")
 
+sort_mode = st.selectbox(
+    "Sort retrieved chunks by",
+    ["relevance", "semantic", "bm25", "mmr"]
+)
+
 if st.button("Ask"):
 
     store = st.session_state["doc_store"]
@@ -238,16 +244,69 @@ if st.button("Ask"):
         question,
         documents,
         doc_embeddings,
+        sort_mode=sort_mode,
     )
+
+    timings = {}
+
+    start = time.perf_counter()
+    semantic_chunks, _ = get_chunks(
+        question,
+        documents,
+        doc_embeddings,
+        sort_mode="semantic",
+    )
+    timings["Semantic"] = (time.perf_counter() - start) * 1000
+
+    start = time.perf_counter()
+    bm25_chunks, _ = get_chunks(
+        question,
+        documents,
+        doc_embeddings,
+        sort_mode="bm25",
+    )
+    timings["BM25"] = (time.perf_counter() - start) * 1000
+
+    start = time.perf_counter()
+    relevance_chunks, _ = get_chunks(
+        question,
+        documents,
+        doc_embeddings,
+        sort_mode="relevance",
+    )
+    timings["Relevance"] = (time.perf_counter() - start) * 1000
+
+    start = time.perf_counter()
+    mmr_chunks, _ = get_chunks(
+        question,
+        documents,
+        doc_embeddings,
+        sort_mode="mmr",
+    )
+    timings["MMR"] = (time.perf_counter() - start) * 1000
 
     with st.expander("Retrieved Chunks", expanded=True):
         for doc, score, sim, bm25, mmr in chunks:
-            st.write(f"""
-Score: {score:.3f}
-Semantic: {sim:.3f}
-BM25: {bm25:.3f}
-MMR: {mmr:.3f}
-""")
+            st.markdown(f"""
+            <div style="display:flex; gap:20px;">
+                <div style="padding:12px; border-radius:10px; color:#00ff99;">
+                    Semantic similarity<br>
+                    <b>{sim:.3f}</b>
+                </div>
+                <div style="padding:12px; border-radius:10px; color:#66b3ff;">
+                    BM25 score<br>
+                    <b>{bm25:.3f}</b>
+                </div>      
+                <div style="padding:12px; border-radius:10px; color:#ff6666;">
+                    Relevance score<br>
+                    <b>{score:.3f}</b>
+                </div>
+                <div style="padding:12px; border-radius:10px; color:#ffcc00;">
+                    MMR score<br>
+                    <b>{mmr:.3f}</b>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             st.write(doc)
             st.divider()
 
@@ -256,10 +315,11 @@ MMR: {mmr:.3f}
     st.subheader("Answer")
     st.write(answer)
 
+    # =================================================
+    # VISUALIZATION DASHBOARD
+    # =================================================
 
-    # =================================================
-    # VISUALIZATION
-    # =================================================
+    st.header("Retrieval Visualization")
 
     document_embeddings = np.asarray(doc_embeddings, dtype=np.float64)
     query_embedding = np.asarray(query_embedding, dtype=np.float64)
@@ -269,14 +329,256 @@ MMR: {mmr:.3f}
     reducer = PCA(n_components=2)
     coords = reducer.fit_transform(all_embeddings)
 
+    retrieved_docs = {doc for doc, *_ in chunks}
+
+    # =================================================
+    # 1. PCA Projection
+    # =================================================
+
+    st.subheader("1. PCA Projection")
+
     plot_df = pd.DataFrame({
         "Sentence": documents + [question],
         "X": coords[:, 0],
         "Y": coords[:, 1],
     })
 
-    plot_df["Type"] = "Document"
-    plot_df.loc[len(plot_df) - 1, "Type"] = "Question"
+    plot_df["Type"] = [
+        "Retrieved" if doc in retrieved_docs else "Document"
+        for doc in documents
+    ] + ["Question"]
 
-    fig = px.scatter(plot_df, x="X", y="Y", color="Type", hover_data=["Sentence"])
+    fig = px.scatter(
+        plot_df,
+        x="X",
+        y="Y",
+        color="Type",
+        hover_data=["Sentence"],
+        title="Embedding Space"
+    )
+
+    fig.update_traces(marker=dict(size=10))
+
     st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 2. Retrieval Pipeline
+    # =================================================
+
+    st.subheader("2. Retrieval Pipeline")
+
+    pipeline_df = pd.DataFrame({
+        "Stage": [
+            "All Documents",
+            "Candidate Pool",
+            "Returned Chunks"
+        ],
+        "Count": [
+            len(documents),
+            min(50, len(documents)),
+            len(chunks)
+        ]
+    })
+
+    fig = px.bar(
+        pipeline_df,
+        x="Stage",
+        y="Count",
+        text="Count",
+        title="Retrieval Pipeline"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 3. Retrieved Chunk Scores
+    # =================================================
+
+    st.subheader("3. Retrieved Chunk Scores")
+
+    score_df = pd.DataFrame({
+        "Chunk": [f"Chunk {i+1}" for i in range(len(chunks))],
+        "Semantic": [c[2] for c in chunks],
+        "BM25": [c[3] for c in chunks],
+        "Relevance": [c[1] for c in chunks],
+        "MMR": [c[4] for c in chunks],
+    })
+
+    score_long = score_df.melt(
+        id_vars="Chunk",
+        var_name="Metric",
+        value_name="Score"
+    )
+
+    fig = px.bar(
+        score_long,
+        x="Chunk",
+        y="Score",
+        color="Metric",
+        barmode="group",
+        title="Comparison of Retrieval Scores"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 4. Semantic vs BM25
+    # =================================================
+
+    st.subheader("4. Semantic vs BM25")
+
+    scatter_df = pd.DataFrame({
+        "Semantic": [c[2] for c in chunks],
+        "BM25": [c[3] for c in chunks],
+        "Relevance": [c[1] for c in chunks],
+        "Chunk": [f"Chunk {i+1}" for i in range(len(chunks))]
+    })
+
+    fig = px.scatter(
+        scatter_df,
+        x="Semantic",
+        y="BM25",
+        color="Relevance",
+        size="Relevance",
+        hover_name="Chunk",
+        title="Semantic Similarity vs BM25"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 5. Similarity Heatmap
+    # =================================================
+
+    st.subheader("5. Similarity Between Retrieved Chunks")
+
+    retrieved_embeddings = []
+
+    for doc, *_ in chunks:
+        idx = documents.index(doc)
+        retrieved_embeddings.append(doc_embeddings[idx])
+
+    retrieved_embeddings = np.asarray(retrieved_embeddings)
+
+    heat = cosine_similarity(retrieved_embeddings)
+
+    heat_df = pd.DataFrame(
+        heat,
+        index=[f"C{i+1}" for i in range(len(chunks))],
+        columns=[f"C{i+1}" for i in range(len(chunks))]
+    )
+
+    fig = px.imshow(
+        heat_df,
+        text_auto=".2f", # pyright: ignore[reportArgumentType]
+        color_continuous_scale="Viridis",
+        title="Cosine Similarity Matrix"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 6. Relevance Distribution (Entire Corpus)
+    # =================================================
+
+    st.subheader("6. Distribution of Semantic Scores")
+
+    semantic_scores = np.dot(
+        document_embeddings,
+        query_embedding
+    ) / (
+        np.linalg.norm(document_embeddings, axis=1)
+        * np.linalg.norm(query_embedding)
+    )
+
+    dist_df = pd.DataFrame({
+        "Semantic Score": semantic_scores
+    })
+
+    fig = px.histogram(
+        dist_df,
+        x="Semantic Score",
+        nbins=30,
+        title="Semantic Similarity Distribution"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 7. MMR Selection Order
+    # =================================================
+
+    st.subheader("7. MMR Selection Order")
+
+    mmr_df = pd.DataFrame({
+        "Selection": range(1, len(chunks)+1),
+        "MMR Score": [c[4] for c in chunks]
+    })
+
+    fig = px.line(
+        mmr_df,
+        x="Selection",
+        y="MMR Score",
+        markers=True,
+        title="MMR Selection Order"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # =================================================
+    # 8. Retrieval Method Comparison
+    # =================================================
+
+    st.subheader("Retrieval Method Comparison")
+    compare_df = pd.DataFrame({
+        "Semantic": [
+            c[0][:60]
+            for c in semantic_chunks
+        ],
+        "BM25": [
+            c[0][:60]
+            for c in bm25_chunks
+        ],
+        "Relevance": [
+            c[0][:60]
+            for c in relevance_chunks
+        ],
+        "MMR": [
+            c[0][:60]
+            for c in mmr_chunks
+        ]
+    })
+
+    st.dataframe(compare_df)
+
+    # =================================================
+    # 9. Retrieval Timing
+    # =================================================
+
+    st.subheader("9. Retrieval Time")
+
+    timing_df = pd.DataFrame({
+        "Method": list(timings.keys()),
+        "Time (ms)": list(timings.values())
+    })
+
+    fig = px.bar(
+        timing_df,
+        x="Method",
+        y="Time (ms)",
+        text="Time (ms)",
+        title="Retrieval Speed Comparison"
+    )
+
+    fig.update_traces(
+        texttemplate="%{y:.1f} ms",
+        textposition="outside"
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(
+        timing_df.style.format({
+            "Time (ms)": "{:.2f}"
+        })
+    )

@@ -10,12 +10,6 @@ from rank_bm25 import BM25Okapi
 # Helpers
 # -----------------------------
 
-def softmax(x: np.ndarray) -> np.ndarray:
-    x = x - np.max(x)
-    e = np.exp(x)
-    return e / (np.sum(e) + 1e-12)
-
-
 def get_hybrid_weights(query: str):
     q = query.lower()
 
@@ -33,10 +27,12 @@ def get_hybrid_weights(query: str):
 
 def mmr_select(doc_embeddings, scores, k=15, lambda_=0.7):
     selected = []
-    selected_scores = []
+    selected_mmr_scores = []
     candidates = list(range(len(scores)))
 
-    normed = doc_embeddings / (np.linalg.norm(doc_embeddings, axis=1, keepdims=True) + 1e-12)
+    normed = doc_embeddings / (
+        np.linalg.norm(doc_embeddings, axis=1, keepdims=True) + 1e-12
+    )
 
     while len(selected) < k and candidates:
         best = None
@@ -62,59 +58,26 @@ def mmr_select(doc_embeddings, scores, k=15, lambda_=0.7):
             break
 
         selected.append(best)
-        selected_scores.append(best_score)
+        selected_mmr_scores.append(best_score)
         candidates.remove(best)
 
-    return selected, selected_scores
+    return selected, selected_mmr_scores
 
 
-def rerank_with_llm(query: str, docs: List[str]):
-    """
-    Lightweight LLM reranker (optional but high impact)
-    """
-    client = get_aoai_client()
-
-    prompt = f"""
-You are a ranking system.
-
-Rank these documents by relevance to the query.
-Return ONLY a JSON list of indices (best to worst).
-
-Query:
-{query}
-
-Documents:
-""" + "\n".join(f"{i}. {d}" for i, d in enumerate(docs))
-
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    try:
-        import json
-
-        content = response.choices[0].message.content or "[]"
-        order = json.loads(content)
-
-        return order
-    except:
-        return list(range(len(docs)))
+def build_doc_embeddings(documents: List[str]) -> np.ndarray:
+    return embed_texts(documents)
 
 
 # -----------------------------
 # Core RAG retrieval
 # -----------------------------
 
-def build_doc_embeddings(documents: List[str]) -> np.ndarray:
-    return embed_texts(documents)
-
-
 def retrieve(
     query: str,
     documents: Optional[List[str]] = None,
     doc_embeddings: Optional[np.ndarray] = None,
     k: int = 15,
+    sort_mode: str = "relevance"
 ) -> Tuple[List[Tuple[str, float, float, float, float]], np.ndarray]:
 
     if documents is None:
@@ -128,17 +91,8 @@ def retrieve(
 
     query_lower = query.lower()
 
-    aggregation_words = {
-        "highest", "lowest", "maximum", "minimum", "average",
-        "sum", "count", "top", "all", "every", "above", "below",
-        "greater", "less", "at least", "or higher", "or lower"
-    }
-
-    if any(word in query_lower for word in aggregation_words):
-        k = 50
-
     # -----------------------------
-    # Stage 1: Embedding retrieval
+    # embeddings
     # -----------------------------
     query_embedding = embed_text(query)
 
@@ -148,7 +102,7 @@ def retrieve(
     sims = (doc_embeddings @ query_embedding) / (doc_norms * query_norm + 1e-12)
 
     # -----------------------------
-    # Stage 2: BM25
+    # BM25
     # -----------------------------
     tokenized_docs = [doc.lower().split() for doc in documents]
     bm25 = BM25Okapi(tokenized_docs)
@@ -157,107 +111,95 @@ def retrieve(
     bm25_scores = np.array(bm25.get_scores(tokenized_query))
 
     # -----------------------------
-    # Stage 3: normalization (stable)
+    # normalization
     # -----------------------------
     eps = 1e-12
 
-    sims = (sims - np.min(sims)) / (np.max(sims) - np.min(sims) + eps)
-    bm25_scores = (bm25_scores - np.min(bm25_scores)) / (np.max(bm25_scores) - np.min(bm25_scores) + eps)
+    sims_norm = (sims - np.min(sims)) / (np.max(sims) - np.min(sims) + eps)
+    bm25_norm = (bm25_scores - np.min(bm25_scores)) / (np.max(bm25_scores) - np.min(bm25_scores) + eps)
 
     # -----------------------------
-    # Stage 4: adaptive hybrid scoring
+    # hybrid score
     # -----------------------------
     w_sim, w_bm25 = get_hybrid_weights(query)
-    final_score = w_sim * sims + w_bm25 * bm25_scores
+    final_score = w_sim * sims_norm + w_bm25 * bm25_norm
+
+
+    # =====================================================
+    # MODE 1: PURE SORTING MODES
+    # =====================================================
+
+    if sort_mode == "semantic":
+        idx = np.argsort(sims_norm)[::-1]
+
+    elif sort_mode == "bm25":
+        idx = np.argsort(bm25_norm)[::-1]
+
+    elif sort_mode == "relevance":
+        idx = np.argsort(final_score)[::-1]
+
+    # =====================================================
+    # MODE 2: MMR (selection mode)
+    # =====================================================
+    elif sort_mode == "mmr":
+        candidate_k = min(50, len(documents))
+        top_idx = np.argsort(final_score)[::-1][:candidate_k]
+
+        mmr_selected, mmr_scores = mmr_select(
+            doc_embeddings[top_idx],
+            final_score[top_idx],
+            k=k
+        )
+
+        selected_indices = [top_idx[i] for i in mmr_selected]
+
+        return [
+            (
+                documents[i],
+                float(final_score[i]),
+                float(sims_norm[i]),
+                float(bm25_norm[i]),
+                float(mmr_scores[j])
+            )
+            for j, i in enumerate(selected_indices)
+        ], query_embedding
+
+    else:
+        idx = np.argsort(final_score)[::-1]
 
     # -----------------------------
-    # Stage 5: candidate pruning
+    # standard output path
     # -----------------------------
-    candidate_k = min(50, len(documents))
-    top_idx = np.argsort(final_score)[::-1][:candidate_k]
+    idx = idx[:k]
 
-    candidate_docs = [documents[i] for i in top_idx]
-    candidate_scores = final_score[top_idx]
-    candidate_embeddings = doc_embeddings[top_idx]
-
-    # -----------------------------
-    # Stage 6: reranking (LLM)
-    # -----------------------------
-    try:
-        order = rerank_with_llm(query, candidate_docs)
-        top_idx = [top_idx[i] for i in order if i < len(top_idx)]
-        candidate_scores = final_score[top_idx]
-    except:
-        pass
-
-    # -----------------------------
-    # Stage 7: diversity selection (MMR)
-    # -----------------------------
-    final_selected, mmr_scores = mmr_select(
-        doc_embeddings[top_idx],
-        candidate_scores,
-        k=k
-    )
-
-    selected_indices = [top_idx[i] for i in final_selected]
-
-    scores = [
+    return [
         (
             documents[i],
             float(final_score[i]),
-            float(sims[i]),
-            float(bm25_scores[i]),
-            float(mmr_scores[idx]) 
+            float(sims_norm[i]),
+            float(bm25_norm[i]),
+            0.0  # no MMR in non-MMR modes
         )
-        for idx, i in enumerate(selected_indices)
-    ]
-
-    return scores, query_embedding
-
+        for i in idx
+    ], query_embedding
 
 # -----------------------------
-# Answering (unchanged logic, cleaner formatting)
+# Answering
 # -----------------------------
 
 def answer_question(question, chunks):
 
     context = "\n".join(
         f"[Chunk {i+1}] (score={score:.3f})\n{doc}\n"
-        for i, (doc, score, *rest) in enumerate(chunks)
+        for i, (doc, score, *_) in enumerate(chunks)
     )
-
-    print("\nRetrieved Chunks")
-    print("=" * 50)
-
-    for i, (doc, score, *rest) in enumerate(chunks):
-        print(f"\nChunk {i+1}")
-        print(f"Score: {score:.3f}")
-        print(doc)
-
-    prompt = f"""
-Before answering:
-
-- Use ONLY the provided context.
-- Reject false assumptions explicitly.
-- If missing, say "I cannot determine the answer from the provided context."
-- Combine chunks when needed.
-- If asked for ALL items, scan everything.
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-""".strip()
 
     client = get_aoai_client()
 
     response = client.chat.completions.create(
         model="gpt-4.1",
         messages=[
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": f"{context}\n\nQuestion:\n{question}"}
         ],
     )
 
